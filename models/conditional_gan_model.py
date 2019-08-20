@@ -8,6 +8,7 @@ from util.image_pool import ImagePool
 from .base_model import BaseModel
 from . import networks
 from .losses import init_loss
+import torch.nn.functional as F
 
 try:
 	xrange          # Python2
@@ -35,7 +36,7 @@ class ConditionalGAN(BaseModel):
 		)
 		if self.isTrain:
 			use_sigmoid = opt.gan_type == 'gan'
-			self.netD = networks.define_D(
+			self.netD   = networks.define_D(
 				opt.output_nc, opt.ndf, opt.which_model_netD,
 				opt.n_layers_D, opt.norm, use_sigmoid, self.gpu_ids, use_parallel
 			)
@@ -55,7 +56,7 @@ class ConditionalGAN(BaseModel):
 			self.criticUpdates = 5 if opt.gan_type == 'wgan-gp' else 1
 			
 			# define loss functions
-			self.discLoss, self.contentLoss = init_loss(opt, self.Tensor)
+			self.discLoss, self.contentLoss, self.darkchannelLoss = init_loss(opt, self.Tensor)
 
 		print('---------- Networks initialized -------------')
 		networks.print_network(self.netG)
@@ -64,7 +65,7 @@ class ConditionalGAN(BaseModel):
 		print('-----------------------------------------------')
 
 	def set_input(self, input):
-		AtoB = self.opt.which_direction == 'AtoB'
+		AtoB   = self.opt.which_direction == 'AtoB'
 		inputA = input['A' if AtoB else 'B']
 		inputB = input['B' if AtoB else 'A']
 		self.input_A.resize_(inputA.size()).copy_(inputA)
@@ -72,9 +73,11 @@ class ConditionalGAN(BaseModel):
 		self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
 	def forward(self):
-		self.real_A = Variable(self.input_A)
-		self.fake_B = self.netG.forward(self.real_A)
-		self.real_B = Variable(self.input_B)
+		self.real_A    = Variable(self.input_A)
+		self.fake_B    = self.netG.forward(self.real_A)
+		self.real_B    = Variable(self.input_B)
+		self.fake_B_dc = self.get_dark_channel(self.fake_B)
+		self.real_B_dc = self.get_dark_channel(self.real_B)
 
 	# no backprop gradients
 	def test(self):
@@ -86,6 +89,17 @@ class ConditionalGAN(BaseModel):
 	def get_image_paths(self):
 		return self.image_paths
 
+	# (additional)
+	# get dark channel
+	def get_dark_channel(self, data):
+		local_size = 5
+		tmp = -F.max_pool2d(input=-data, 
+							kernel_size=local_size, 
+							stride=1, 
+							padding=int(np.ceil((local_size - 1) / 2)))
+		(dark_channel, _) = torch.min(input=tmp, dim=1, keepdim=True)
+		return dark_channel
+
 	def backward_D(self):
 		self.loss_D = self.discLoss.get_loss(self.netD, self.real_A, self.fake_B, self.real_B)
 
@@ -95,8 +109,10 @@ class ConditionalGAN(BaseModel):
 		self.loss_G_GAN = self.discLoss.get_g_loss(self.netD, self.real_A, self.fake_B)
 		# Second, G(A) = B
 		self.loss_G_Content = self.contentLoss.get_loss(self.fake_B, self.real_B) * self.opt.lambda_A
+		# Third, dark channel
+		self.loss_G_DarkChannel = self.darkchannelLoss.get_loss(self.fake_B_dc, self.real_B_dc) * 3 * self.opt.lambda_A
 
-		self.loss_G = self.loss_G_GAN + self.loss_G_Content
+		self.loss_G = self.loss_G_GAN + self.loss_G_Content + self.loss_G_DarkChannel
 
 		self.loss_G.backward()
 
@@ -115,6 +131,7 @@ class ConditionalGAN(BaseModel):
 	def get_current_errors(self):
 		return OrderedDict([('G_GAN', self.loss_G_GAN.item()),
 							('G_L1', self.loss_G_Content.item()),
+							('G_DC', self.loss_G_DarkChannel.item()),
 							('D_real+fake', self.loss_D.item())
 							])
 

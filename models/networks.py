@@ -47,6 +47,9 @@ def define_G(input_nc, output_nc, ngf, which_model_netG, norm='batch', use_dropo
     elif which_model_netG == 'resnet_6blocks':
         netG = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6,
                                gpu_ids=gpu_ids, use_parallel=use_parallel, learn_residual=learn_residual)
+    elif which_model_netG == 'resnet_3blocks':
+        netG = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=3,
+                               gpu_ids=gpu_ids, use_parallel=use_parallel, learn_residual=learn_residual)
     elif which_model_netG == 'unet_128':
         netG = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout,
                              gpu_ids=gpu_ids, use_parallel=use_parallel, learn_residual=learn_residual)
@@ -125,8 +128,8 @@ class ResnetGenerator(nn.Module):
             nn.ReLU(True)
         ]
 
-        n_downsampling = 2
-
+        # n_downsampling = 2
+        # 
         # 下采样
         # for i in range(n_downsampling): # [0,1]
         # 	mult = 2**i
@@ -138,12 +141,24 @@ class ResnetGenerator(nn.Module):
         # 	]
 
         model += [
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1, bias=use_bias),
+            nn.Conv2d(64, 128, kernel_size=5, stride=2, padding=2, bias=use_bias),
             norm_layer(128),
             nn.ReLU(True),
 
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1, bias=use_bias),
+            nn.Conv2d(128, 256, kernel_size=5, stride=2, padding=2, bias=use_bias),
             norm_layer(256),
+            nn.ReLU(True)
+        ]
+
+        self.model_enc_p64_d256 = nn.Sequential(*model)
+
+        model = [
+            nn.Conv2d(256, 512, kernel_size=5, stride=2, padding=2, bias=use_bias),
+            norm_layer(512),
+            nn.ReLU(True),
+
+            nn.Conv2d(512, 512, kernel_size=5, stride=2, padding=2, bias=use_bias),
+            norm_layer(512),
             nn.ReLU(True)
         ]
 
@@ -156,8 +171,20 @@ class ResnetGenerator(nn.Module):
             # 		use_dropout=use_dropout, use_bias=use_bias)
             # ]
             model += [
-                ResnetBlock(256, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)
+                ResnetBlock(512, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)
             ]
+
+        model += [
+            nn.ConvTranspose2d(512, 512, kernel_size=5, stride=2, padding=2, output_padding=1, bias=use_bias),
+            norm_layer(512),
+            nn.ReLU(True),
+
+            nn.ConvTranspose2d(512, 256, kernel_size=5, stride=2, padding=2, output_padding=1, bias=use_bias),
+            norm_layer(256),
+            nn.ReLU(True),
+        ]
+
+        self.model_dec_p64_d256 = nn.Sequential(*model)
 
         # 上采样
         # for i in range(n_downsampling):
@@ -170,12 +197,12 @@ class ResnetGenerator(nn.Module):
         # 		norm_layer(int(ngf * mult / 2)),
         # 		nn.ReLU(True)
         # 	]
-        model += [
-            nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1, bias=use_bias),
+        model = [
+            nn.ConvTranspose2d(256, 128, kernel_size=5, stride=2, padding=2, output_padding=1, bias=use_bias),
             norm_layer(128),
             nn.ReLU(True),
 
-            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1, bias=use_bias),
+            nn.ConvTranspose2d(128, 64, kernel_size=5, stride=2, padding=2, output_padding=1, bias=use_bias),
             norm_layer(64),
             nn.ReLU(True),
         ]
@@ -186,13 +213,15 @@ class ResnetGenerator(nn.Module):
             nn.Tanh()
         ]
 
-        self.model = nn.Sequential(*model)
+        self.model_last = nn.Sequential(*model)
 
     def forward(self, input):
         if self.gpu_ids and isinstance(input.data, torch.cuda.FloatTensor) and self.use_parallel:
             output = nn.parallel.data_parallel(self.model, input, self.gpu_ids)
         else:
-            output = self.model(input)
+            x_1    = self.model_enc_p64_d256(input)
+            x_2    = self.model_dec_p64_d256(x_1)
+            output = self.model_last(x_1 + x_2)
         if self.learn_residual:
             # output = input + output
             output = torch.clamp(input + output, min=-1, max=1)
@@ -207,13 +236,13 @@ class ResnetBlock(nn.Module):
 
 		padAndConv = {
 			'reflect': [
-                nn.ReflectionPad2d(1),
-                nn.Conv2d(dim, dim, kernel_size=3, bias=use_bias)],
+                nn.ReflectionPad2d(2),
+                nn.Conv2d(dim, dim, kernel_size=5, bias=use_bias)],
 			'replicate': [
-                nn.ReplicationPad2d(1),
-                nn.Conv2d(dim, dim, kernel_size=3, bias=use_bias)],
+                nn.ReplicationPad2d(2),
+                nn.Conv2d(dim, dim, kernel_size=5, bias=use_bias)],
 			'zero': [
-                nn.Conv2d(dim, dim, kernel_size=3, padding=1, bias=use_bias)]
+                nn.Conv2d(dim, dim, kernel_size=5, padding=2, bias=use_bias)]
 		}
 
 		try:

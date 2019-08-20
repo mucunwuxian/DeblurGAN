@@ -7,8 +7,10 @@ from util.visualizer import Visualizer
 from pdb import set_trace as st
 from util import html
 from util.metrics import PSNR
-from ssim import SSIM
+from util.metrics import SSIM # from ssim import SSIM
 from PIL import Image
+
+import torch
 
 opt = TestOptions().parse()
 opt.nThreads = 1   # test code only supports nThreads = 1

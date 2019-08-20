@@ -19,6 +19,13 @@ class ContentLoss:
 	def get_loss(self, fakeIm, realIm):
 		return self.criterion(fakeIm, realIm)
 
+class DarkChannelLoss:
+	def __init__(self, loss):
+		self.criterion = loss
+			
+	def get_loss(self, fakeImDc, realImDc):
+		return self.criterion(fakeImDc, realImDc)
+
 class PerceptualLoss():
 	
 	def contentFunc(self):
@@ -129,7 +136,7 @@ class DiscLossWGANGP(DiscLossLS):
 		return 'DiscLossWGAN-GP'
 
 	def __init__(self, opt, tensor):
-		super(DiscLossWGANGP, self).__init__(opt, tensor)
+		super(DiscLossLS, self).__init__(opt, tensor)
 		# DiscLossLS.initialize(self, opt, tensor)
 		self.LAMBDA = 10
 		
@@ -183,7 +190,11 @@ def init_loss(opt, tensor):
 		# content_loss.initialize(nn.L1Loss())
 	else:
 		raise ValueError("Model [%s] not recognized." % opt.model)
-	
+
+	# (additional)
+	# dark channel loss
+	darkchannel_loss = DarkChannelLoss(nn.MSELoss())
+
 	if opt.gan_type == 'wgan-gp':
 		disc_loss = DiscLossWGANGP(opt, tensor)
 	elif opt.gan_type == 'lsgan':
@@ -193,4 +204,5 @@ def init_loss(opt, tensor):
 	else:
 		raise ValueError("GAN [%s] not recognized." % opt.gan_type)
 	# disc_loss.initialize(opt, tensor)
-	return disc_loss, content_loss
+
+	return disc_loss, content_loss, darkchannel_loss
